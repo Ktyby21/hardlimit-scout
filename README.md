@@ -207,4 +207,3 @@ See [LICENSE](./LICENSE).
 ```
 ::contentReference[oaicite:0]{index=0}
 ```
->>>>>>> 80f9fae (Initial public MVP (AGPLv3): lambda + cfn + cli + tests)
