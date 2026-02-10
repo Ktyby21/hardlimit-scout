@@ -204,6 +204,3 @@ Issues and PRs are welcome.
 Hardlimit Scout is licensed under **GNU AGPLv3**.
 See [LICENSE](./LICENSE).
 
-```
-::contentReference[oaicite:0]{index=0}
-```
