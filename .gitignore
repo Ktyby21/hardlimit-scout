@@ -1,44 +1,35 @@
-# === Python ===
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.coverage
-coverage.xml
-htmlcov/
-dist/
-build/
-*.egg-info/
-.eggs/
-pip-wheel-metadata/
-.pyre/
-.git/
-# === Virtualenv ===
-venv/
-.venv/
-env/
-ENV/
 
-# === OS / editor ===
+# Virtualenv
+.venv/
+venv/
+ENV/
+env/
+
+# dotenv / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-*.swp
-*.swo
 
-# === AWS / local artifacts ===
-.aws-sam/
-samconfig.toml
-cfn/packaged.yaml
-packaged.yaml
-out*.json
-*.log
-
-# === App local state / secrets ===
-.env
-.env.*
-!.env.example
+# Local state
 .scout_state.json
+
+# Packaged CFN artifacts (optional)
+cfn/packaged.yaml
