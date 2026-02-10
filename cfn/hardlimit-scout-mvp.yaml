@@ -1,0 +1,194 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: "Hardlimit Scout (Core): DynamoDB state + Lambda scanner + EventBridge schedule (customer-hosted)"
+
+Parameters:
+  S3Buckets:
+    Type: String
+    Default: ""
+    Description: "Comma-separated bucket names for restricted S3 scan. If set, ListAllMyBuckets is not required."
+
+  SlackWebhookUrl:
+    Type: String
+    Default: ""
+    Description: "Optional Slack incoming webhook URL."
+
+  ScoutThresholds:
+    Type: String
+    Default: "80,90,95"
+    Description: "Comma-separated thresholds in percent, e.g. 80,90,95"
+
+  MaxRoles:
+    Type: Number
+    Default: 300
+    Description: "Safety limit: max IAM roles to scan for inline policies."
+
+  ScheduleExpression:
+    Type: String
+    Default: "rate(1 day)"
+    Description: "EventBridge schedule, e.g. rate(1 day) or cron(0 9 * * ? *)"
+
+  ReportBucket:
+    Type: String
+    Default: ""
+    Description: "Optional S3 bucket to write JSON reports (latest + timestamped)."
+
+  ReportPrefix:
+    Type: String
+    Default: "reports/"
+    Description: "S3 prefix for reports."
+
+  NotifyChannels:
+    Type: String
+    Default: "s3,slack"
+    Description: "Comma-separated channels: s3,slack"
+
+Conditions:
+  HasReportBucket: !Not [!Equals [!Ref ReportBucket, ""]]
+  HasS3Buckets: !Not [!Equals [!Ref S3Buckets, ""]]
+
+Resources:
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  ScoutLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: hardlimit-scout-lambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+              # DynamoDB state store (anti-spam thresholds)
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt StateTable.Arn
+                  - !Sub "${StateTable.Arn}/index/*"
+
+              # Write reports to S3 (optional)
+              - !If
+                - HasReportBucket
+                - Effect: Allow
+                  Action:
+                    - s3:PutObject
+                  Resource: !Sub "arn:aws:s3:::${ReportBucket}/*"
+                - !Ref "AWS::NoValue"
+
+              # Used by code for account id
+              - Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: "*"
+
+              # === Scanner permissions (read-only) ===
+              - Effect: Allow
+                Action:
+                  - iam:ListPolicies
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListRoles
+                  - iam:ListRolePolicies
+                  - iam:GetRolePolicy
+                Resource: "*"
+
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                Resource: "*"
+
+              - Effect: Allow
+                Action:
+                  - organizations:ListPolicies
+                  - organizations:DescribePolicy
+                Resource: "*"
+
+              # S3:
+              # Always need GetBucketPolicy. ListAllMyBuckets only if S3Buckets is empty.
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketPolicy
+                Resource: "*"
+
+              - !If
+                - HasS3Buckets
+                - !Ref "AWS::NoValue"
+                - Effect: Allow
+                  Action:
+                    - s3:ListAllMyBuckets
+                  Resource: "*"
+
+  ScoutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.13
+      Handler: scout.lambda_handler.handler
+      CodeUri: ../src/
+      Role: !GetAtt ScoutLambdaRole.Arn
+      Timeout: 90
+      MemorySize: 256
+      Environment:
+        Variables:
+          S3_BUCKETS: !Ref S3Buckets
+          STATE_TABLE: !Ref StateTable
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          SCOUT_THRESHOLDS: !Ref ScoutThresholds
+          MAX_ROLES: !Ref MaxRoles
+          REPORT_BUCKET: !Ref ReportBucket
+          REPORT_PREFIX: !Ref ReportPrefix
+          NOTIFY_CHANNELS: !Ref NotifyChannels
+
+  ScoutScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ScoutFunction.Arn
+          Id: ScoutFunctionTarget
+
+  AllowEventsInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ScoutFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScoutScheduleRule.Arn
+
+Outputs:
+  DynamoTableName:
+    Value: !Ref StateTable
+  LambdaArn:
+    Value: !GetAtt ScoutFunction.Arn
+  ScheduleRuleArn:
+    Value: !GetAtt ScoutScheduleRule.Arn
